@@ -13,9 +13,9 @@
 # limitations under the License.
 # ==============================================================================
 
-"""A very simple MNIST classifier.
+"""Advanced MNIST classifier.
 See extensive documentation at
-http://tensorflow.org/tutorials/mnist/beginners/index.md
+https://www.tensorflow.org/tutorials/mnist/pros/
 """
 from __future__ import absolute_import
 from __future__ import division
