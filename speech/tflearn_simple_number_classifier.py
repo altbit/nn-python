@@ -1,6 +1,6 @@
 #!/usr/bin/env PYTHONIOENCODING="utf-8" python
 import tflearn
-import speech_data
+import speech.speech_data as speech_data
 import numpy
 
 # Simple spoken digit recognition demo, with 98% accuracy in under a minute
