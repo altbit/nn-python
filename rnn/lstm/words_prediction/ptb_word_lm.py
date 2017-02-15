@@ -105,6 +105,9 @@ class PTBModel(object):
         size = config.hidden_size
         vocab_size = config.vocab_size
 
+        print("raw inputs shape: ", input_.input_data.get_shape())
+        print("raw targets shape: ", input_.targets.get_shape())
+
         # Slightly better results can be obtained with forget gate biases
         # initialized to 1 but the hyperparameters of the model would need to be
         # different than reported in the paper.
@@ -122,6 +125,7 @@ class PTBModel(object):
             embedding = tf.get_variable(
                 "embedding", [vocab_size, size], dtype=data_type())
             inputs = tf.nn.embedding_lookup(embedding, input_.input_data)
+        print("inputs shape: ", inputs.get_shape())
 
         if is_training and config.keep_prob < 1:
             inputs = tf.nn.dropout(inputs, config.keep_prob)
@@ -142,15 +146,21 @@ class PTBModel(object):
                 if time_step > 0: tf.get_variable_scope().reuse_variables()
                 (cell_output, state) = cell(inputs[:, time_step, :], state)
                 outputs.append(cell_output)
+        print("each output shape: ", outputs[0].get_shape())
 
-        output = tf.reshape(tf.concat_v2(outputs, 1), [-1, size])
+        concatenated_output = tf.concat_v2(outputs, 1)
+        print("concatenated output shape: ", concatenated_output.get_shape())
+        output = tf.reshape(concatenated_output, [-1, size])
+        print("concatenated and resized output shape: ", output.get_shape())
         softmax_w = tf.get_variable(
             "softmax_w", [size, vocab_size], dtype=data_type())
         softmax_b = tf.get_variable("softmax_b", [vocab_size], dtype=data_type())
         logits = tf.matmul(output, softmax_w) + softmax_b
+        reshaped_targets = tf.reshape(input_.targets, [-1])
+        print("reshaped targets shape: ", reshaped_targets.get_shape())
         loss = tf.nn.seq2seq.sequence_loss_by_example(
             [logits],
-            [tf.reshape(input_.targets, [-1])],
+            [reshaped_targets],
             [tf.ones([batch_size * num_steps], dtype=data_type())])
         self._cost = cost = tf.reduce_sum(loss) / batch_size
         self._final_state = state
