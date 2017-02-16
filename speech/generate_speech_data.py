@@ -1,0 +1,176 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
+import os
+
+from librosa import load
+from scikits.talkbox.features import mfcc
+import os.path
+import numpy as np
+import subprocess
+import random
+
+AUTOMATIC_ALL_VOICES = False
+good_voices = {
+    'english': {'name': 'En', 'rate': 120},
+    'english-mb-en1': {'name': 'En1', 'rate': 100},
+    'english-north': {'name': 'En2', 'rate': 130},
+    'english_rp': {'name': 'En3', 'rate': 110},
+    'english-us': {'name': 'Us', 'rate': 120},
+    'us-mbrola-1': {'name': 'Us1', 'rate': 120},
+    'us-mbrola-2': {'name': 'Us2', 'rate': 120},
+    'us-mbrola-3': {'name': 'Us3', 'rate': 120},
+    'en-german': {'name': 'German', 'rate': 110},
+    'en-german-5': {'name': 'German1', 'rate': 100},
+    'en-greek': {'name': 'Greek', 'rate': 150},
+    'en-romanian': {'name': 'Romanian', 'rate': 120},
+    'en-dutch': {'name': 'Dutch', 'rate': 120},
+    'en-french': {'name': 'French', 'rate': 110},
+    'en-hungarian': {'name': 'Hungarian', 'rate': 100},
+    'en-westindies': {'name': 'Westindies', 'rate': 140},
+    'en-afrikaans': {'name': 'Afrikaans', 'rate': 100},
+    'en-polish': {'name': 'Polish', 'rate': 110},
+    'en-swedish': {'name': 'Swedish', 'rate': 110},
+    'en-swedish-f': {'name': 'Swedish1', 'rate': 110},
+    'en-scottish': {'name': 'Scottish', 'rate': 130}
+}
+
+bad_voices = {
+    'english_wmids': {'name': 'En4', 'rate': 120}
+}
+
+
+def check_voices():
+    voice_infos = str(subprocess.check_output(["espeak", "--voices=en"])).split("\n")[1:-1]
+    voices = map(lambda x: x.split()[3], voice_infos)
+    for voice in good_voices.keys():
+        if voice in voices:
+            print(voice + " FOUND!")
+    for voice in good_voices.keys():
+        if not voice in voices:
+            print(voice + " MISSING!")
+            del good_voices[voice]
+
+
+def generate_mfcc(voice_name, voice_id, line, line_num, rate, path):
+    filename = path + "/wav/{0}_{1}_{2}.wav".format(line_num, voice_name, rate)
+    cmd = "espeak '{0}' -v {1} -s {2}  -w '{3}'".format(line, voice_id, rate, filename)
+    os.system(cmd)
+    signal, sample_rate = load(filename, mono=True)
+    mel_features, mspec, spec = mfcc(signal, fs=sample_rate, nceps=26)
+    mel_features = np.swapaxes(mel_features, 0, 1)  # timesteps x nFeatures -> nFeatures x timesteps
+    np.save(path + "/mfcc/%s_%s_%d.npy" % (line_num, voice_name, rate), mel_features)
+
+
+def generate_labels(line, path, line_num, relevant_words):
+    num_of_labels = len(relevant_words) + 1  # Add last label if none words are relevant
+    labels = np.full(num_of_labels, -1)
+    at_least_one_present = False
+    for word in line.split(" "):
+        try:
+            relevant_index = relevant_words.index(word)
+            labels[relevant_index] = 1
+            at_least_one_present = True
+        except:
+            pass  # ignore if word is not relevant
+    if not at_least_one_present:
+        labels[num_of_labels - 1] = 1
+
+    np.save(path + "/labels/%s.npy" % line_num, labels)
+    return labels
+
+
+def generate_phonemes(line, path):
+    pronounced = subprocess.check_output(["./line_to_phonemes", line]).decode('UTF-8').strip()  # todo
+    # phonemes = string_to_int_line(pronounced, pad_to=max_line_length)  # hack for numbers!
+    # phonemes = string_to_int_line(line, pad_to=max_line_length)
+    np.save(path + "/phonemes/%s.npy" % line, phonemes)
+
+
+def generate(lines, path, relevant_words = None):
+    # generate a bunch of files for each line (with many voices, nuances):
+    # spoken wav
+    # mfcc: Mel-frequency cepstrum
+    # todo: pronounced phonemes
+    if not os.path.exists(path): os.mkdir(path)
+    if not os.path.exists(path + "/labels/"): os.mkdir(path + "/labels/")
+    if not os.path.exists(path + "/mfcc/"): os.mkdir(path + "/mfcc/")
+    if not os.path.exists(path + "/wav/"): os.mkdir(path + "/wav/")
+    out = open(path + "/lines.list", "wt")
+    line_num = 1
+    for line in lines:
+        if isinstance(line, bytes):
+            line = line.decode('UTF-8').strip()
+        print("generating %s" % line)
+        out.write("%d: %s\n" % (line_num, line))
+        # generate_phonemes(line, path)
+        if relevant_words:
+            generate_labels(line, path, line_num, relevant_words)
+        for voice in good_voices.keys():
+            from_rate = good_voices[voice]['rate'] - 40
+            to_rate = good_voices[voice]['rate'] + 81
+            for rate in range(from_rate, to_rate, 20):
+                try:
+                    generate_mfcc(good_voices[voice]['name'], voice, line, line_num, rate, path)
+                except:
+                    pass  # ignore after debug!
+        line_num += 1
+
+
+def generate_lines(relevant_words, irrelevant_words, num_of_lines, max_line_length, mean_relevance_percent):
+    lines = []
+    for i in range(0, num_of_lines):
+        line = ""
+        for w in range(0, random.randint(1, max_line_length)):
+            if random.randint(1, 100) < mean_relevance_percent:
+                line += relevant_words[random.randint(0, len(relevant_words) - 1)] + " "
+            else:
+                line += irrelevant_words[random.randint(0, len(irrelevant_words) - 1)] + " "
+        lines.append(line)
+    return lines
+
+
+def spoken_numbers():
+    path = "data/spoken_numbers"
+    nums = list(map(str, range(0, 10)))
+    generate(nums, path)
+
+
+def spoken_words():
+    path = "data/spoken_words_wav"
+    wordslist = "wordslist.txt"
+    words = open(wordslist).readlines()
+    generate(words, path)
+
+
+def spoken_sentences():
+    path = "data/spoken_sentences_wav"
+    linelist = "sentences.txt"
+    lines = open(linelist).readlines()
+    generate(lines, path)
+
+
+def spoken_sentences_mll():
+    path = "data/spoken_sentences_mll_wav"
+    relevant_wordlist = "mll_relevant_words.txt"
+    relevant_words = list(map(
+        lambda w: w.replace("\n", ''),
+        open(relevant_wordlist).readlines()
+    ))
+    irrelevant_wordlist = "mll_irrelevant_words.txt"
+    irrelevant_words = list(map(
+        lambda w: w.replace("\n", ''),
+        open(irrelevant_wordlist).readlines()
+    ))
+    lines = generate_lines(relevant_words, irrelevant_words, 10, 20, 30)
+    generate(lines, path, relevant_words)
+
+
+def main():
+    check_voices()
+    spoken_sentences_mll()
+
+if __name__ == '__main__':
+    main()
+    print("DONE!")
