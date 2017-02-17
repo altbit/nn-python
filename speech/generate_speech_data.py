@@ -11,34 +11,37 @@ import numpy as np
 import subprocess
 import random
 
-AUTOMATIC_ALL_VOICES = False
 good_voices = {
-    'english': {'name': 'En', 'rate': 120},
     'english-mb-en1': {'name': 'En1', 'rate': 100},
-    'english-north': {'name': 'En2', 'rate': 130},
-    'english_rp': {'name': 'En3', 'rate': 110},
-    'english-us': {'name': 'Us', 'rate': 120},
     'us-mbrola-1': {'name': 'Us1', 'rate': 120},
     'us-mbrola-2': {'name': 'Us2', 'rate': 120},
     'us-mbrola-3': {'name': 'Us3', 'rate': 120},
     'en-german': {'name': 'German', 'rate': 110},
     'en-german-5': {'name': 'German1', 'rate': 100},
-    'en-greek': {'name': 'Greek', 'rate': 150},
     'en-romanian': {'name': 'Romanian', 'rate': 120},
     'en-dutch': {'name': 'Dutch', 'rate': 120},
     'en-french': {'name': 'French', 'rate': 110},
     'en-hungarian': {'name': 'Hungarian', 'rate': 100},
-    'en-westindies': {'name': 'Westindies', 'rate': 140},
-    'en-afrikaans': {'name': 'Afrikaans', 'rate': 100},
-    'en-polish': {'name': 'Polish', 'rate': 110},
     'en-swedish': {'name': 'Swedish', 'rate': 110},
-    'en-swedish-f': {'name': 'Swedish1', 'rate': 110},
-    'en-scottish': {'name': 'Scottish', 'rate': 130}
+    'en-swedish-f': {'name': 'Swedish1', 'rate': 110}
 }
 
 bad_voices = {
-    'english_wmids': {'name': 'En4', 'rate': 120}
+    'english-us': {'name': 'Us', 'rate': 120},
+    'en-greek': {'name': 'Greek', 'rate': 150},
+    'english': {'name': 'En', 'rate': 120},
+    'english-north': {'name': 'En2', 'rate': 130},
+    'english_rp': {'name': 'En3', 'rate': 110},
+    'english_wmids': {'name': 'En4', 'rate': 120},
+    'en-scottish': {'name': 'Scottish', 'rate': 130},
+    'en-westindies': {'name': 'Westindies', 'rate': 140},
+
+    'en-afrikaans': {'name': 'Afrikaans', 'rate': 100},
+    'en-polish': {'name': 'Polish', 'rate': 110}
 }
+
+validation_percent = 10
+validation_voices = ['us-mbrola-2', 'en-german-5']
 
 
 def check_voices():
@@ -55,12 +58,23 @@ def check_voices():
 
 def generate_mfcc(voice_name, voice_id, line, line_num, rate, path):
     filename = path + "/wav/{0}_{1}_{2}.wav".format(line_num, voice_name, rate)
-    cmd = "espeak '{0}' -v {1} -s {2}  -w '{3}'".format(line, voice_id, rate, filename)
-    os.system(cmd)
-    signal, sample_rate = load(filename, mono=True)
-    mel_features, mspec, spec = mfcc(signal, fs=sample_rate, nceps=26)
-    mel_features = np.swapaxes(mel_features, 0, 1)  # timesteps x nFeatures -> nFeatures x timesteps
-    np.save(path + "/mfcc/%s_%s_%d.npy" % (line_num, voice_name, rate), mel_features)
+    try:
+        out = str(subprocess.check_output([
+            "espeak",
+            "-v", voice_id,
+            "-w", filename,
+            "-s {0}".format(rate),
+            line
+        ], stderr=subprocess.STDOUT))
+        if "FATAL ERROR" in out:
+            print("CANNOT GENERATE WAV")
+        else:
+            signal, sample_rate = load(filename, mono=True)
+            mel_features, mspec, spec = mfcc(signal, fs=sample_rate, nceps=26)
+            mel_features = np.swapaxes(mel_features, 0, 1)  # timesteps x nFeatures -> nFeatures x timesteps
+            np.save(path + "/mfcc/%s_%s_%d.npy" % (line_num, voice_name, rate), mel_features)
+    except:
+        pass
 
 
 def generate_labels(line, path, line_num, relevant_words):
@@ -92,7 +106,7 @@ def generate(lines, path, relevant_words = None):
     # generate a bunch of files for each line (with many voices, nuances):
     # spoken wav
     # mfcc: Mel-frequency cepstrum
-    # todo: pronounced phonemes
+    # mll labels
     if not os.path.exists(path): os.mkdir(path)
     if not os.path.exists(path + "/labels/"): os.mkdir(path + "/labels/")
     if not os.path.exists(path + "/mfcc/"): os.mkdir(path + "/mfcc/")
@@ -102,19 +116,30 @@ def generate(lines, path, relevant_words = None):
     for line in lines:
         if isinstance(line, bytes):
             line = line.decode('UTF-8').strip()
-        print("generating %s" % line)
-        out.write("%d: %s\n" % (line_num, line))
-        # generate_phonemes(line, path)
+        type = "train"
+        if random.randint(1, 100) < validation_percent:
+            type = "validation"
+        print("generating [%s] %s" % (type, line))
+        out.write("%d:%s:%s\n" % (line_num, type, line))
+        voices = good_voices.keys()
         if relevant_words:
             generate_labels(line, path, line_num, relevant_words)
-        for voice in good_voices.keys():
-            from_rate = good_voices[voice]['rate'] - 40
-            to_rate = good_voices[voice]['rate'] + 81
-            for rate in range(from_rate, to_rate, 20):
-                try:
-                    generate_mfcc(good_voices[voice]['name'], voice, line, line_num, rate, path)
-                except:
-                    pass  # ignore after debug!
+            if type == "validation":
+                voice_id = validation_voices[random.randint(0, len(validation_voices) - 1)]
+            else:
+                voice_id = voices[random.randint(0, len(voices) - 1)]
+                while voice_id in validation_voices:
+                    voice_id = voices[random.randint(0, len(voices) - 1)]
+            voices = [voice_id]
+        for voice in voices:
+            # from_rate = good_voices[voice]['rate'] - 40
+            # to_rate = good_voices[voice]['rate'] + 81
+            # for rate in range(from_rate, to_rate, 20):
+            rate = random.randint(good_voices[voice]['rate'] - 40, good_voices[voice]['rate'] + 80)
+            try:
+                generate_mfcc(good_voices[voice]['name'], voice, line, line_num, rate, path)
+            except:
+                pass  # ignore after debug!
         line_num += 1
 
 
@@ -163,7 +188,8 @@ def spoken_sentences_mll():
         lambda w: w.replace("\n", ''),
         open(irrelevant_wordlist).readlines()
     ))
-    lines = generate_lines(relevant_words, irrelevant_words, 10, 20, 30)
+    lines = generate_lines(relevant_words, irrelevant_words,
+                           num_of_lines=100, max_line_length=20, mean_relevance_percent=30)
     generate(lines, path, relevant_words)
 
 
