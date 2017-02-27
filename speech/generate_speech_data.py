@@ -3,13 +3,17 @@ from __future__ import division
 from __future__ import print_function
 
 import os
-
-from librosa import load
-from scikits.talkbox.features import mfcc
 import os.path
 import numpy as np
 import subprocess
 import random
+
+DATA_DIR = 'data/'
+
+NUMBERS_PATH = DATA_DIR + "spoken_numbers"
+WORDS_PATH = DATA_DIR + "spoken_words_wav"
+SENTENCES_PATH = DATA_DIR + "spoken_sentences_wav"
+SENTENCES_MLL_PATH = DATA_DIR + "spoken_sentences_mll_wav"
 
 good_voices = {
     'english-mb-en1': {'name': 'En1', 'rate': 100},
@@ -42,6 +46,7 @@ bad_voices = {
 
 validation_percent = 10
 validation_voices = ['us-mbrola-2', 'en-german-5']
+n_features = 26
 
 
 def check_voices():
@@ -57,6 +62,9 @@ def check_voices():
 
 
 def generate_mfcc(voice_name, voice_id, line, line_num, rate, path):
+    from librosa import load
+    from scikits.talkbox.features import mfcc
+
     filename = path + "/wav/{0}_{1}_{2}.wav".format(line_num, voice_name, rate)
     try:
         out = str(subprocess.check_output([
@@ -70,8 +78,8 @@ def generate_mfcc(voice_name, voice_id, line, line_num, rate, path):
             print("CANNOT GENERATE WAV")
         else:
             signal, sample_rate = load(filename, mono=True)
-            mel_features, mspec, spec = mfcc(signal, fs=sample_rate, nceps=26)
-            mel_features = np.swapaxes(mel_features, 0, 1)  # timesteps x nFeatures -> nFeatures x timesteps
+            mel_features, mspec, spec = mfcc(signal, fs=sample_rate, nceps=n_features)
+            # mel_features = np.swapaxes(mel_features, 0, 1)  # timesteps x nFeatures -> nFeatures x timesteps
             np.save(path + "/mfcc/%s_%s_%d.npy" % (line_num, voice_name, rate), mel_features)
     except:
         pass
@@ -99,7 +107,7 @@ def generate_phonemes(line, path):
     pronounced = subprocess.check_output(["./line_to_phonemes", line]).decode('UTF-8').strip()  # todo
     # phonemes = string_to_int_line(pronounced, pad_to=max_line_length)  # hack for numbers!
     # phonemes = string_to_int_line(line, pad_to=max_line_length)
-    np.save(path + "/phonemes/%s.npy" % line, phonemes)
+    # np.save(path + "/phonemes/%s.npy" % line, phonemes)
 
 
 def generate(lines, path, relevant_words = None):
@@ -135,7 +143,7 @@ def generate(lines, path, relevant_words = None):
             # from_rate = good_voices[voice]['rate'] - 40
             # to_rate = good_voices[voice]['rate'] + 81
             # for rate in range(from_rate, to_rate, 20):
-            rate = random.randint(good_voices[voice]['rate'] - 40, good_voices[voice]['rate'] + 80)
+            rate = random.randint(good_voices[voice]['rate'] - 30, good_voices[voice]['rate'] + 40)
             try:
                 generate_mfcc(good_voices[voice]['name'], voice, line, line_num, rate, path)
             except:
@@ -156,28 +164,24 @@ def generate_lines(relevant_words, irrelevant_words, num_of_lines, max_line_leng
     return lines
 
 
-def spoken_numbers():
-    path = "data/spoken_numbers"
+def generate_spoken_numbers():
     nums = list(map(str, range(0, 10)))
-    generate(nums, path)
+    generate(nums, NUMBERS_PATH)
 
 
-def spoken_words():
-    path = "data/spoken_words_wav"
+def generate_spoken_words():
     wordslist = "wordslist.txt"
     words = open(wordslist).readlines()
-    generate(words, path)
+    generate(words, WORDS_PATH)
 
 
-def spoken_sentences():
-    path = "data/spoken_sentences_wav"
+def generate_spoken_sentences():
     linelist = "sentences.txt"
     lines = open(linelist).readlines()
-    generate(lines, path)
+    generate(lines, SENTENCES_PATH)
 
 
-def spoken_sentences_mll():
-    path = "data/spoken_sentences_mll_wav"
+def generate_spoken_sentences_mll():
     relevant_wordlist = "mll_relevant_words.txt"
     relevant_words = list(map(
         lambda w: w.replace("\n", ''),
@@ -189,13 +193,14 @@ def spoken_sentences_mll():
         open(irrelevant_wordlist).readlines()
     ))
     lines = generate_lines(relevant_words, irrelevant_words,
-                           num_of_lines=100, max_line_length=20, mean_relevance_percent=30)
-    generate(lines, path, relevant_words)
+                           num_of_lines=10000, max_line_length=20, mean_relevance_percent=20)
+    generate(lines, SENTENCES_MLL_PATH, relevant_words)
 
 
 def main():
     check_voices()
-    spoken_sentences_mll()
+    generate_spoken_sentences_mll()
+
 
 if __name__ == '__main__':
     main()
