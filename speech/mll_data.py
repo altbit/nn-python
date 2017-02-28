@@ -29,15 +29,18 @@ class MllData(object):
         self.cell_size = cell_size
 
         self.n_features = raw_input[0].shape[1]
-        self.n_classes = raw_labels[0].shape
+        self.n_classes = raw_labels[0].shape[0]
         assert cell_size % self.n_features == 0, "cell size should be multiple num of features"
         cell_size_factor = cell_size // self.n_features
 
         self.max_timesteps = 0
         for input_index in range(len(raw_labels)):
             self.max_timesteps = max(self.max_timesteps, raw_input[input_index].shape[0])
-        self.max_timesteps += self.max_timesteps % cell_size_factor
+        print("max timesteps", self.max_timesteps)
+        self.max_timesteps += cell_size_factor - self.max_timesteps % cell_size_factor
+        print("increased max timesteps", self.max_timesteps)
         self.max_steps = self.max_timesteps // cell_size_factor
+        print("max steps", self.max_steps)
 
     def get_batch(self, batch_size):
         '''Produce random batch from raw input data
@@ -53,10 +56,10 @@ class MllData(object):
         for batch_index, raw_index in enumerate(random_indexes[0:batch_size]):
             mfcc = self.raw_input[raw_index]
             # pad with zeros to max_timesteps
-            pad_len = self.max_timesteps - mfcc.reshape[0]
+            pad_len = self.max_timesteps - mfcc.shape[0]
             padded = np.pad(mfcc, ((0, pad_len), (0, 0)), 'constant', constant_values=0)
             # reshape time_steps x n_features -> steps x cell_size
-            inputs[batch_index] = padded.reshape([-1, self.cell_size])
+            inputs[batch_index] = padded.reshape([self.max_steps, self.cell_size])
             labels[batch_index] = self.raw_labels[raw_index]
         return inputs, labels
 
@@ -90,8 +93,6 @@ def main():
     train, validation = load_data(SENTENCES_MLL_PATH)
     validation_input = MllData(validation['mfcc'], validation['labels'], 208)
     v_inputs, v_labels = validation_input.get_batch(5)
-    print(v_inputs)
-    print(v_labels)
 
 
 if __name__ == '__main__':
