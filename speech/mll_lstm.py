@@ -34,10 +34,13 @@ class SmallConfig(object):
     max_grad_norm = 5
     num_layers = 2
     hidden_size = 104
-    max_epoch = 4
+    epoch_size = 30
+    constant_lr_max_epoch = 4
+    max_epoch = 10
     keep_prob = 1.0
     lr_decay = 0.5
     batch_size = 10
+    validation_batch_size = 3
 
 
 class MediumConfig(object):
@@ -47,10 +50,13 @@ class MediumConfig(object):
     max_grad_norm = 5
     num_layers = 2
     hidden_size = 416
-    max_epoch = 6
+    epoch_size = 40
+    constant_lr_max_epoch = 6
+    max_epoch = 16
     keep_prob = 0.5
     lr_decay = 0.8
     batch_size = 20
+    validation_batch_size = 5
 
 
 class LargeConfig(object):
@@ -60,10 +66,13 @@ class LargeConfig(object):
     max_grad_norm = 10
     num_layers = 2
     hidden_size = 1300
-    max_epoch = 14
+    epoch_size = 60
+    constant_lr_max_epoch = 8
+    max_epoch = 24
     keep_prob = 0.35
     lr_decay = 1 / 1.15
     batch_size = 20
+    validation_batch_size = 5
 
 
 def get_config():
@@ -86,6 +95,14 @@ class MLLModel(object):
     @property
     def input(self):
         return self._input
+
+    @property
+    def epoch_size(self):
+        return self._epoch_size
+
+    @property
+    def batch_size(self):
+        return self._batch_size
 
     @property
     def initial_state(self):
@@ -113,15 +130,13 @@ class MLLModel(object):
 
     def __init__(self, is_training, config, input_):
         self._input = input_
+        self._epoch_size = config.epoch_size if is_training else 1
 
-        batch_size = input_.batch_size
+        self._batch_size = batch_size = config.batch_size if is_training else config.validation_batch_size
         num_steps = input_.num_steps
         size = config.hidden_size
-        vocab_size = config.vocab_size
+        num_classes = input_.num_classes
 
-        # Slightly better results can be obtained with forget gate biases
-        # initialized to 1 but the hyperparameters of the model would need to be
-        # different than reported in the paper.
         lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(size, forget_bias=0.0, state_is_tuple=True)
         if is_training and config.keep_prob < 1:
             lstm_cell = tf.nn.rnn_cell.DropoutWrapper(
@@ -130,44 +145,35 @@ class MLLModel(object):
 
         self._initial_state = cell.zero_state(batch_size, data_type())
 
-        with tf.device("/cpu:0"):
-            embedding = tf.get_variable(
-                "embedding", [vocab_size, size], dtype=data_type())
-            inputs = tf.nn.embedding_lookup(embedding, input_.input_data)
-
+        inputs = tf.placeholder(data_type(), shape=[batch_size, num_steps, size])
         if is_training and config.keep_prob < 1:
             inputs = tf.nn.dropout(inputs, config.keep_prob)
+        labels = tf.placeholder(tf.int32, shape=[batch_size, num_classes])
 
-        # Simplified version of tensorflow.models.rnn.rnn.py's rnn().
-        # This builds an unrolled LSTM for tutorial purposes only.
-        # In general, use the rnn() or state_saving_rnn() from rnn.py.
-        #
-        # The alternative version of the code below is:
-        #
-        # inputs = tf.unstack(inputs, num=num_steps, axis=1)
-        # outputs, state = tf.nn.rnn(cell, inputs, initial_state=self._initial_state)
-        outputs = []
-        state = self._initial_state
         with tf.variable_scope("RNN"):
-            for time_step in range(num_steps):
-                if time_step > 0: tf.get_variable_scope().reuse_variables()
-                (cell_output, state) = cell(inputs[:, time_step, :], state)
-                outputs.append(cell_output)
+            inputs = tf.unstack(inputs, num=num_steps, axis=1)
+            outputs, state = tf.nn.rnn(cell, inputs, initial_state=self._initial_state)
+        self._final_state = state
 
-        output = tf.reshape(tf.concat(1, outputs), [-1, size])
+        print("outputs shape: ", outputs.get_shape())
+        output = outputs.pop()
         print("output shape: ", output.get_shape())
+
         softmax_w = tf.get_variable(
-            "softmax_w", [size, vocab_size], dtype=data_type())
-        softmax_b = tf.get_variable("softmax_b", [vocab_size], dtype=data_type())
-        logits = tf.matmul(output, softmax_w) + softmax_b
+            "softmax_w", [size, num_classes], dtype=data_type())
+        softmax_b = tf.get_variable("softmax_b", [num_classes], dtype=data_type())
+        classes = tf.matmul(output, softmax_w) + softmax_b
+        print("classes shape: ", logits.get_shape())
+
+        classes_w = tf.get_variable(
+            "classes_w", [num_classes, num_classes], dtype=data_type())
+        classes_b = tf.get_variable("classes_b", [num_classes], dtype=data_type())
+        logits = tf.matmul(classes, classes_w) + classes_b
         print("logits shape: ", logits.get_shape())
-        loss = tf.nn.seq2seq.sequence_loss_by_example(
-            [logits],
-            [tf.reshape(input_.targets, [-1])],
-            [tf.ones([batch_size * num_steps], dtype=data_type())])
+
+        loss = tf.nn.sigmoid_cross_entropy_with_logits(logits, labels)
         self._loss = loss
         self._cost = cost = tf.reduce_sum(loss) / batch_size
-        self._final_state = state
 
         if not is_training:
             return
@@ -200,23 +206,21 @@ def run_epoch(session, model, eval_op=None, verbose=False):
     if eval_op is not None:
         fetches["eval_op"] = eval_op
 
-    for step in range(model.input.epoch_size):
-        feed_dict = {}
-        for i, (c, h) in enumerate(model.initial_state):
-            feed_dict[c] = state[i].c
-            feed_dict[h] = state[i].h
+    for step in range(model.epoch_size):
+        inputs, labels = model.input.get_batch(model.batch_size)
+        feed_dict = {inputs: inputs, labels: labels}
 
         vals = session.run(fetches, feed_dict)
         cost = vals["cost"]
         state = vals["final_state"]
 
         costs += cost
-        iters += model.input.num_steps
+        iters += 1
 
-        if verbose and step % (model.input.epoch_size // 10) == 10:
-            print("%.3f perplexity: %.3f speed: %.0f wps" %
-                  (step * 1.0 / model.input.epoch_size, np.exp(costs / iters),
-                   iters * model.input.batch_size / (time.time() - start_time)))
+        if verbose and step % (model.epoch_size // 10) == 10:
+            print("%.3f Accuracy: %.3f speed: %.0f sentences/sec" %
+                  (step * 1.0 / model.epoch_size, np.exp(costs / iters),
+                   iters * model.batch_size / (time.time() - start_time)))
 
     return np.exp(costs / iters)
 
@@ -233,30 +237,30 @@ def main(_):
                                                     config.init_scale)
 
         with tf.name_scope("Train"):
-            train_input = MLLInput(config=config, data=train_data, name="TrainInput")
+            train_input = MllData(train_data['mfcc'], train_data['labels'], config.hidden_size)
             with tf.variable_scope("Model", reuse=None, initializer=initializer):
                 m = MLLModel(is_training=True, config=config, input_=train_input)
             tf.scalar_summary("Training Loss", m.cost)
             tf.scalar_summary("Learning Rate", m.lr)
 
         with tf.name_scope("Valid"):
-            valid_input = MLLInput(config=config, data=valid_data, name="ValidInput")
+            valid_input = MllData(valid_data['mfcc'], valid_data['labels'], config.hidden_size)
             with tf.variable_scope("Model", reuse=True, initializer=initializer):
                 mvalid = MLLModel(is_training=False, config=config, input_=valid_input)
             tf.scalar_summary("Validation Loss", mvalid.cost)
 
         sv = tf.train.Supervisor(logdir=FLAGS.save_path)
         with sv.managed_session() as session:
-            for i in range(config.max_max_epoch):
-                lr_decay = config.lr_decay ** max(i + 1 - config.max_epoch, 0.0)
+            for i in range(config.max_epoch):
+                lr_decay = config.lr_decay ** max(i + 1 - config.constant_lr_max_epoch, 0.0)
                 m.assign_lr(session, config.learning_rate * lr_decay)
 
                 print("Epoch: %d Learning rate: %.3f" % (i + 1, session.run(m.lr)))
-                train_perplexity = run_epoch(session, m, eval_op=m.train_op,
+                train_accuracy = run_epoch(session, m, eval_op=m.train_op,
                                              verbose=True)
-                print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
-                valid_perplexity = run_epoch(session, mvalid)
-                print("Epoch: %d Valid Perplexity: %.3f" % (i + 1, valid_perplexity))
+                print("Epoch: %d Train Accuracy: %.3f" % (i + 1, train_accuracy))
+                valid_accuracy = run_epoch(session, mvalid)
+                print("Epoch: %d Valid Accuracy: %.3f" % (i + 1, valid_accuracy))
 
             if FLAGS.save_path:
                 print("Saving model to %s." % FLAGS.save_path)

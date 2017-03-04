@@ -12,6 +12,14 @@ from generate_speech_data import SENTENCES_MLL_PATH
 class MllData(object):
     """The multi-label learning input data."""
 
+    @property
+    def num_steps(self):
+        return self.max_steps
+
+    @property
+    def num_classes(self):
+        return self.n_classes
+
     def __init__(self, raw_input, raw_labels, cell_size):
         '''Object with input data for LSTM-MLL NN
              raw_input: list of 2D numpy arrays with raw mfcc input frames [timesteps x n_features]
