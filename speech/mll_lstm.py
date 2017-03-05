@@ -18,13 +18,13 @@ flags.DEFINE_string("data_path", "data/spoken_sentences_mll_wav",
                     "Where the training/test data is stored.")
 flags.DEFINE_string("save_path", None,
                     "Model output directory.")
-flags.DEFINE_bool("use_fp16", False,
-                  "Train using 16-bit floats instead of 32bit floats")
+flags.DEFINE_bool("use_fp64", False,
+                  "Train using 64-bit floats instead of 32-bit floats")
 FLAGS = flags.FLAGS
 
 
 def data_type():
-    return tf.float16 if FLAGS.use_fp16 else tf.float32
+    return tf.float64 if FLAGS.use_fp64 else tf.float32
 
 
 class SmallConfig(object):
@@ -97,6 +97,14 @@ class MLLModel(object):
         return self._input
 
     @property
+    def inputs_ph(self):
+        return self._inputs_ph
+
+    @property
+    def labels_ph(self):
+        return self._labels_ph
+
+    @property
     def epoch_size(self):
         return self._epoch_size
 
@@ -145,17 +153,17 @@ class MLLModel(object):
 
         self._initial_state = cell.zero_state(batch_size, data_type())
 
-        inputs = tf.placeholder(data_type(), shape=[batch_size, num_steps, size])
+        self._inputs_ph = tf.placeholder(data_type(), shape=[batch_size, num_steps, size])
         if is_training and config.keep_prob < 1:
-            inputs = tf.nn.dropout(inputs, config.keep_prob)
-        labels = tf.placeholder(tf.int32, shape=[batch_size, num_classes])
+            self._inputs_ph = tf.nn.dropout(self._inputs_ph, config.keep_prob)
+        self._labels_ph = tf.placeholder(data_type(), shape=[batch_size, num_classes])
 
         with tf.variable_scope("RNN"):
-            inputs = tf.unstack(inputs, num=num_steps, axis=1)
+            inputs = tf.unstack(self._inputs_ph, num=num_steps, axis=1)
             outputs, state = tf.nn.rnn(cell, inputs, initial_state=self._initial_state)
         self._final_state = state
 
-        print("outputs shape: ", outputs.get_shape())
+        print("outputs len: ", len(outputs))
         output = outputs.pop()
         print("output shape: ", output.get_shape())
 
@@ -163,7 +171,7 @@ class MLLModel(object):
             "softmax_w", [size, num_classes], dtype=data_type())
         softmax_b = tf.get_variable("softmax_b", [num_classes], dtype=data_type())
         classes = tf.matmul(output, softmax_w) + softmax_b
-        print("classes shape: ", logits.get_shape())
+        print("classes shape: ", classes.get_shape())
 
         classes_w = tf.get_variable(
             "classes_w", [num_classes, num_classes], dtype=data_type())
@@ -171,7 +179,7 @@ class MLLModel(object):
         logits = tf.matmul(classes, classes_w) + classes_b
         print("logits shape: ", logits.get_shape())
 
-        loss = tf.nn.sigmoid_cross_entropy_with_logits(logits, labels)
+        loss = tf.nn.sigmoid_cross_entropy_with_logits(logits, self._labels_ph)
         self._loss = loss
         self._cost = cost = tf.reduce_sum(loss) / batch_size
 
@@ -207,14 +215,16 @@ def run_epoch(session, model, eval_op=None, verbose=False):
         fetches["eval_op"] = eval_op
 
     for step in range(model.epoch_size):
-        inputs, labels = model.input.get_batch(model.batch_size)
-        feed_dict = {inputs: inputs, labels: labels}
+        _inputs, _labels = model.input.get_batch(model.batch_size)
+        inputs = tf.convert_to_tensor(_inputs, name="inputs", dtype=data_type())
+        labels = tf.convert_to_tensor(_labels, name="labels", dtype=data_type())
 
-        vals = session.run(fetches, feed_dict)
-        cost = vals["cost"]
-        state = vals["final_state"]
-
-        costs += cost
+        vals = session.run(fetches, feed_dict={
+            model.inputs_ph: inputs,
+            model.labels_ph: labels
+        })
+        # state = vals["final_state"]
+        costs += vals["cost"]
         iters += 1
 
         if verbose and step % (model.epoch_size // 10) == 10:
