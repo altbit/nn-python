@@ -216,8 +216,6 @@ def run_epoch(session, model, eval_op=None, verbose=False):
 
     for step in range(model.epoch_size):
         _inputs, _labels = model.input.get_batch(model.batch_size)
-        # inputs = tf.convert_to_tensor(_inputs, name="inputs", dtype=data_type())
-        # labels = tf.convert_to_tensor(_labels, name="labels", dtype=data_type())
 
         vals = session.run(fetches, feed_dict={
             model.inputs_ph: _inputs,
