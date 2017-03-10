@@ -30,16 +30,16 @@ def data_type():
 class SmallConfig(object):
     """Small config."""
     init_scale = 0.1
-    learning_rate = 1.0
+    learning_rate = 0.1
     max_grad_norm = 5
     num_layers = 2
-    hidden_size = 104
-    epoch_size = 30
+    hidden_size = 260
+    epoch_size = 50
     constant_lr_max_epoch = 4
     max_epoch = 10
     keep_prob = 1.0
-    lr_decay = 0.5
-    batch_size = 10
+    lr_decay = 0.7
+    batch_size = 20
     validation_batch_size = 3
 
 
@@ -149,6 +149,7 @@ class MLLModel(object):
         if is_training and config.keep_prob < 1:
             lstm_cell = tf.nn.rnn_cell.DropoutWrapper(
                 lstm_cell, output_keep_prob=config.keep_prob)
+#        cell = lstm_cell
         cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * config.num_layers, state_is_tuple=True)
 
         self._initial_state = cell.zero_state(batch_size, data_type())
@@ -179,7 +180,7 @@ class MLLModel(object):
         logits = tf.matmul(classes, classes_w) + classes_b
         print("logits shape: ", logits.get_shape())
 
-        loss = tf.nn.sigmoid_cross_entropy_with_logits(logits, self._labels_ph)
+        loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits, self._labels_ph), 1)
         self._loss = loss
         self._cost = cost = tf.reduce_sum(loss) / batch_size
 
@@ -187,13 +188,14 @@ class MLLModel(object):
             return
 
         self._lr = tf.Variable(0.0, trainable=False)
-        tvars = tf.trainable_variables()
-        grads, _ = tf.clip_by_global_norm(tf.gradients(cost, tvars),
-                                          config.max_grad_norm)
-        optimizer = tf.train.GradientDescentOptimizer(self._lr)
-        self._train_op = optimizer.apply_gradients(
-            zip(grads, tvars),
-            global_step=tf.contrib.framework.get_or_create_global_step())
+#        tvars = tf.trainable_variables()
+#        grads, _ = tf.clip_by_global_norm(tf.gradients(cost, tvars),
+#                                          config.max_grad_norm)
+#        optimizer = tf.train.GradientDescentOptimizer(self._lr)
+#        self._train_op = optimizer.apply_gradients(
+#            zip(grads, tvars),
+#            global_step=tf.contrib.framework.get_or_create_global_step())
+        self._train_op = tf.train.AdamOptimizer(self._lr).minimize(cost)
 
         self._new_lr = tf.placeholder(
             tf.float32, shape=[], name="new_learning_rate")
@@ -205,11 +207,9 @@ def run_epoch(session, model, eval_op=None, verbose=False):
     start_time = time.time()
     costs = 0.0
     iters = 0
-    state = session.run(model.initial_state)
 
     fetches = {
         "cost": model.cost,
-        "final_state": model.final_state,
     }
     if eval_op is not None:
         fetches["eval_op"] = eval_op
@@ -221,16 +221,15 @@ def run_epoch(session, model, eval_op=None, verbose=False):
             model.inputs_ph: _inputs,
             model.labels_ph: _labels
         })
-        # state = vals["final_state"]
         costs += vals["cost"]
         iters += 1
 
-        if verbose and step % (model.epoch_size // 10) == 10:
+        if verbose and step % (model.epoch_size // 10) == 0:
             print("%.3f Accuracy: %.3f speed: %.0f sentences/sec" %
-                  (step * 1.0 / model.epoch_size, np.exp(costs / iters),
+                  (step * 1.0 / model.epoch_size, costs / iters,
                    iters * model.batch_size / (time.time() - start_time)))
 
-    return np.exp(costs / iters)
+    return costs / iters
 
 
 def main(_):
@@ -248,14 +247,14 @@ def main(_):
             train_input = MllData(train_data['mfcc'], train_data['labels'], config.hidden_size)
             with tf.variable_scope("Model", reuse=None, initializer=initializer):
                 m = MLLModel(is_training=True, config=config, input_=train_input)
-            tf.scalar_summary("Training Loss", m.cost)
-            tf.scalar_summary("Learning Rate", m.lr)
+            # tf.scalar_summary("Training Loss", m.cost)
+            # tf.scalar_summary("Learning Rate", m.lr)
 
-        with tf.name_scope("Valid"):
-            valid_input = MllData(valid_data['mfcc'], valid_data['labels'], config.hidden_size)
-            with tf.variable_scope("Model", reuse=True, initializer=initializer):
-                mvalid = MLLModel(is_training=False, config=config, input_=valid_input)
-            tf.scalar_summary("Validation Loss", mvalid.cost)
+#        with tf.name_scope("Valid"):
+#            valid_input = MllData(valid_data['mfcc'], valid_data['labels'], config.hidden_size)
+#            with tf.variable_scope("Model", reuse=True, initializer=initializer):
+#                mvalid = MLLModel(is_training=False, config=config, input_=valid_input)
+            # tf.scalar_summary("Validation Loss", mvalid.cost)
 
         sv = tf.train.Supervisor(logdir=FLAGS.save_path)
         with sv.managed_session() as session:
@@ -267,8 +266,8 @@ def main(_):
                 train_accuracy = run_epoch(session, m, eval_op=m.train_op,
                                              verbose=True)
                 print("Epoch: %d Train Accuracy: %.3f" % (i + 1, train_accuracy))
-                valid_accuracy = run_epoch(session, mvalid)
-                print("Epoch: %d Valid Accuracy: %.3f" % (i + 1, valid_accuracy))
+#                valid_accuracy = run_epoch(session, mvalid)
+#                print("Epoch: %d Valid Accuracy: %.3f" % (i + 1, valid_accuracy))
 
             if FLAGS.save_path:
                 print("Saving model to %s." % FLAGS.save_path)

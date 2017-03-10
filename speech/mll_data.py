@@ -5,6 +5,7 @@ from __future__ import print_function
 import os
 import os.path
 import numpy as np
+import math
 
 from generate_speech_data import SENTENCES_MLL_PATH
 
@@ -82,18 +83,37 @@ def load_data(path, swap_axes=True):
         texts[num] = text.replace("\n", '')
     train = {'texts': [], 'mfcc': [], 'labels': []}
     validation = {'texts': [], 'mfcc': [], 'labels': []}
+    i = 0;
     for file_name in os.listdir(path + "/mfcc/"):
+        i += 1
+        if i > 800:
+            break
         num, voice, rate = file_name.split("_")
         if types[num] == "train":
             target = train
         else:
             target = validation
-        target['texts'].append(texts[num])
         mfcc = np.load(os.path.join(path + "/mfcc/", file_name))
         if swap_axes:
             mfcc = np.swapaxes(mfcc, 0, 1)
+        skip_file = False
+        for ts in mfcc:
+            for val in ts:
+                if math.isnan(val):
+                    skip_file = True
+                    print(file_name, " is broken")
+                    break
+            if skip_file:
+                break
+        if skip_file:
+            continue
+        target['texts'].append(texts[num])
         target['mfcc'].append(mfcc)
-        target['labels'].append(np.load(os.path.join(path + "/labels/", num + ".npy")))
+        labels = np.load(os.path.join(path + "/labels/", num + ".npy"))
+        for index, value in enumerate(labels):
+            if value == -1:
+                labels[index] = 0
+        target['labels'].append(labels)
     return train, validation
 
 
