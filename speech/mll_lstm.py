@@ -32,12 +32,12 @@ class SmallConfig(object):
     init_scale = 0.1
     learning_rate = 0.1
     max_grad_norm = 5
-    num_layers = 2
-    hidden_size = 260
+    num_layers = 4
+    hidden_size = 520
     epoch_size = 50
-    constant_lr_max_epoch = 4
+    constant_lr_max_epoch = 2
     max_epoch = 10
-    keep_prob = 1.0
+    keep_prob = 0.5
     lr_decay = 0.7
     batch_size = 20
     validation_batch_size = 3
@@ -162,40 +162,42 @@ class MLLModel(object):
         with tf.variable_scope("RNN"):
             inputs = tf.unstack(self._inputs_ph, num=num_steps, axis=1)
             outputs, state = tf.nn.rnn(cell, inputs, initial_state=self._initial_state)
-        self._final_state = state
 
-        print("outputs len: ", len(outputs))
         output = outputs.pop()
-        print("output shape: ", output.get_shape())
 
         softmax_w = tf.get_variable(
             "softmax_w", [size, num_classes], dtype=data_type())
         softmax_b = tf.get_variable("softmax_b", [num_classes], dtype=data_type())
         classes = tf.matmul(output, softmax_w) + softmax_b
-        print("classes shape: ", classes.get_shape())
 
-        classes_w = tf.get_variable(
-            "classes_w", [num_classes, num_classes], dtype=data_type())
-        classes_b = tf.get_variable("classes_b", [num_classes], dtype=data_type())
-        logits = tf.matmul(classes, classes_w) + classes_b
-        print("logits shape: ", logits.get_shape())
+#        classes_w = tf.get_variable(
+#            "classes_w", [num_classes, num_classes], dtype=data_type())
+#        classes_b = tf.get_variable("classes_b", [num_classes], dtype=data_type())
+#        logits = tf.matmul(classes, classes_w) + classes_b
+        logits = classes
+        self._final_state = logits
 
-        loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits, self._labels_ph), 1)
+#        loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits, self._labels_ph), 1)
+        # modified cross entropy to explicit mathematical formula of sigmoid cross entropy loss
+        loss = -tf.reduce_sum(
+           self._labels_ph * tf.log(tf.nn.sigmoid(logits) + 1e-9) +
+           (1 - self._labels_ph) * tf.log(1 - tf.nn.sigmoid(logits) + 1e-9)
+        ) / batch_size
         self._loss = loss
-        self._cost = cost = tf.reduce_sum(loss) / batch_size
+        self._cost = cost = loss
 
         if not is_training:
             return
 
         self._lr = tf.Variable(0.0, trainable=False)
-#        tvars = tf.trainable_variables()
-#        grads, _ = tf.clip_by_global_norm(tf.gradients(cost, tvars),
-#                                          config.max_grad_norm)
-#        optimizer = tf.train.GradientDescentOptimizer(self._lr)
-#        self._train_op = optimizer.apply_gradients(
-#            zip(grads, tvars),
-#            global_step=tf.contrib.framework.get_or_create_global_step())
-        self._train_op = tf.train.AdamOptimizer(self._lr).minimize(cost)
+        tvars = tf.trainable_variables()
+        grads, _ = tf.clip_by_global_norm(tf.gradients(cost, tvars),
+                                          config.max_grad_norm)
+        optimizer = tf.train.GradientDescentOptimizer(self._lr)
+        self._train_op = optimizer.apply_gradients(
+            zip(grads, tvars),
+            global_step=tf.contrib.framework.get_or_create_global_step())
+#        self._train_op = tf.train.AdamOptimizer(self._lr).minimize(cost)
 
         self._new_lr = tf.placeholder(
             tf.float32, shape=[], name="new_learning_rate")
@@ -210,6 +212,7 @@ def run_epoch(session, model, eval_op=None, verbose=False):
 
     fetches = {
         "cost": model.cost,
+        "final_state": model.final_state,
     }
     if eval_op is not None:
         fetches["eval_op"] = eval_op
@@ -223,6 +226,8 @@ def run_epoch(session, model, eval_op=None, verbose=False):
         })
         costs += vals["cost"]
         iters += 1
+        print('real ', _labels[0])
+        print('logits ', vals["final_state"][0])
 
         if verbose and step % (model.epoch_size // 10) == 0:
             print("%.3f Accuracy: %.3f speed: %.0f sentences/sec" %

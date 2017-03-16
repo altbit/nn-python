@@ -83,10 +83,10 @@ def load_data(path, swap_axes=True):
         texts[num] = text.replace("\n", '')
     train = {'texts': [], 'mfcc': [], 'labels': []}
     validation = {'texts': [], 'mfcc': [], 'labels': []}
-    i = 0;
+    i = 0
     for file_name in os.listdir(path + "/mfcc/"):
         i += 1
-        if i > 800:
+        if i > 5000:
             break
         num, voice, rate = file_name.split("_")
         if types[num] == "train":
